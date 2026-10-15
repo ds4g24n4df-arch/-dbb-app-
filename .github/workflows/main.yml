@@ -14,6 +14,34 @@ jobs:
       - name: 取出仓库里的代码
         uses: actions/checkout@v4
 
+      - name: 换官方仓库 + 去掉用不上的 KSP/Room
+        run: |
+          python3 - <<'PY'
+          import pathlib, re
+
+          p = pathlib.Path("settings.gradle.kts")
+          s = p.read_text(encoding="utf-8")
+          s = s.replace("https://maven.aliyun.com/repository/google", "https://dl.google.com/dl/android/maven2")
+          s = s.replace("https://maven.aliyun.com/repository/central", "https://repo1.maven.org/maven2")
+          s = s.replace("https://maven.aliyun.com/repository/gradle-plugin", "https://plugins.gradle.org/m2")
+          p.write_text(s, encoding="utf-8")
+
+          for f in ["build.gradle.kts", "app/build.gradle.kts"]:
+              q = pathlib.Path(f)
+              t = q.read_text(encoding="utf-8")
+              t = re.sub(r"^[ \t]*alias\(libs\.plugins\.(ksp|room)\)[^\n]*\n", "", t, flags=re.M)
+              t = re.sub(r"^[ \t]*room \{[\s\S]*?^\}\n", "", t, flags=re.M)
+              t = re.sub(r"^[ \t]*(ksp|implementation)\(libs\.androidx\.room[^\n]*\n", "", t, flags=re.M)
+              q.write_text(t, encoding="utf-8")
+
+          print("--- 根 build.gradle.kts ---")
+          print(pathlib.Path("build.gradle.kts").read_text(encoding="utf-8"))
+          print("--- 还残留的 ksp/room 行 ---")
+          for f in ["build.gradle.kts", "app/build.gradle.kts"]:
+              hits = [l for l in pathlib.Path(f).read_text(encoding="utf-8").splitlines() if "ksp" in l or "room" in l]
+              print(f, "->", hits if hits else "（干净）")
+          PY
+
       - name: 把 Gradle 换成官方下载源
         run: |
           sed -i 's|^distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-9.8.1-bin.zip|' gradle/wrapper/gradle-wrapper.properties
