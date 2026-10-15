@@ -42,6 +42,9 @@ class MainActivity : ComponentActivity() {
         web = WebView(this)
         web.settings.apply {
             javaScriptEnabled = true
+            useWideViewPort = true
+            loadWithOverviewMode = true
+            setSupportZoom(false)
             // localStorage 必须开：设备标识、登录态、主题都在里面，关了等于每次都是新账号
             domStorageEnabled = true
             databaseEnabled = true
