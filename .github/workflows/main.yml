@@ -27,13 +27,32 @@ jobs:
           java-version: "17"
 
       - name: 记住 Java 17 的位置
-        run: echo "JAVA17=$JAVA_HOME" >> "$GITHUB_ENV"
+        run: |
+          J17="$JAVA_HOME"
+          if [ ! -x "$J17/bin/javac" ]; then
+            J17=$(ls -d "${RUNNER_TOOL_CACHE}"/Java_Temurin*/17* 2>/dev/null | head -1)
+          fi
+          echo "JAVA17=$J17" >> "$GITHUB_ENV"
+          echo "17 的位置：$J17"
+          "$J17/bin/java" -version || true
 
       - name: 装 Java 21（Gradle 用）
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
+
+      - name: 接受安卓许可并补上 SDK 组件
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          echo "SDK=$SDK"
+          ls "$SDK" 2>/dev/null || true
+          SDKMGR=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          echo "sdkmanager=$SDKMGR"
+          if [ -n "$SDKMGR" ]; then
+            yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+            "$SDKMGR" --install "platforms;android-37" "build-tools;36.0.0" 2>&1 | tail -5 || true
+          fi
 
       - name: 缓存依赖与签名钥匙
         uses: actions/cache@v4
@@ -51,7 +70,7 @@ jobs:
           java -version || true
           echo "JAVA17=$JAVA17"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          ls "$ANDROID_SDK_ROOT" 2>/dev/null || true
+          ls "$ANDROID_SDK_ROOT/platforms" 2>/dev/null || true
 
       - name: 开始编译
         run: |
@@ -59,9 +78,13 @@ jobs:
           chmod +x ./gradlew
           if ! ./gradlew assembleDebug --no-daemon --stacktrace \
                  -Dorg.gradle.java.installations.paths="$JAVA17" 2>&1 | tee build.log; then
-            echo "::error::编译失败，下面是最后 30 行（完整日志见构件 build-log）"
-            tail -n 30 build.log | grep -v '^\s*$' | while IFS= read -r line; do
-              echo "::error::$line"
+            echo "::error::==== 失败原因（日志里的 FAILURE 段）===="
+            awk '/^FAILURE:/{f=1} f' build.log | head -25 | sed '/^[[:space:]]*$/d' | while IFS= read -r l; do
+              echo "::error::$l"
+            done
+            echo "::error::==== 关键行 ===="
+            grep -nE "What went wrong|Could not|error:|Failed to|not found|No matching|licen[cs]e|Unsupported|incompatible|requires" build.log | tail -12 | while IFS= read -r l; do
+              echo "::error::$l"
             done
             exit 1
           fi
