@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      注意：这里**不要**定义 app_name。
+      App 名由 app.properties 的 appName 决定（app/build.gradle.kts 用 resValue 生成），
+      这里再写一遍会和它撞名，编译直接报 "Duplicate resources"。
+    -->
+
+    <!-- 无障碍服务在系统设置里显示的那段说明：用户是被系统提示引导过来的，话要说得明白 -->
+    <string name="accessibility_desc">读取直播间公屏（弹幕、点赞、关注），交给店帮帮AI 的语音主播念出来。只读取抖音界面上的公屏文字，不读取其它应用、不上传聊天记录。</string>
+
+    <string name="service_channel_name">开播保活</string>
+    <string name="service_channel_desc">开播期间保持运行，锁屏、切到抖音时也不被系统回收</string>
+    <string name="service_title">店帮帮AI 正在运行</string>
+    <string name="service_text">点一下回到直播间（采集与播放都在这一页）</string>
+
+    <!--
+      App 打开的就是线上语音台这一个地址。
+      换域名时改这一行、重新编一个包即可（页面里所有接口都走同一个域名，不用逐处改）。
+    -->
+    <string name="start_url" translatable="false">https://luffy-22dc5b09.run13.luxiaofei.cc/</string>
+</resources>

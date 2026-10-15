@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  店帮帮AI 安卓 App。
+
+  它做三件事，其余界面和逻辑全部复用线上那套网页（同一个账号、同一份配置）：
+    1. 把语音台装进一个常驻 App，点图标就开，不用每次找浏览器；
+    2. 前台服务保活：锁屏、切到抖音都不让系统随手回收进程；
+    3. 读屏采集：用无障碍服务读抖音界面上的公屏文字，按同一条入站接口推给服务端，
+       于是点赞/关注/弹幕都会被主播念出来（规则、宝子、缓存、优先插播全跟着账号走）。
+
+  权限说明：
+    - INTERNET：连线上服务；
+    - POST_NOTIFICATIONS：前台服务必须挂一张通知（安卓 13+ 要用户同意）；
+    - FOREGROUND_SERVICE(_MEDIA_PLAYBACK)：前台服务类型声明（安卓 14+ 强制）；
+    - REQUEST_IGNORE_BATTERY_OPTIMIZATIONS：引导用户把 App 放进"不受电量限制"白名单，
+      否则系统会在后台把声音掐掉；
+    - WAKE_LOCK：屏幕常亮 / 短时唤醒，长播时别被系统睡死。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:theme="@style/Theme.App">
+        <!--
+          singleTask + configChanges：开播时旋转屏幕、切深浅色、弹出键盘都不重建 Activity ——
+          重建会把正在播的页面连同音频一起打断（现场表现就是"切一下屏幕声音就没了"）。
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden|screenLayout|uiMode"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 前台服务：进程活着，声音才可能在后台继续走（网页被冷冻的原理见 LiveService 注释） -->
+        <service
+            android:name=".LiveService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- 读屏采集：抖音公屏上的字 → 入站接口 -->
+        <service
+            android:name=".DanmuAccessibilityService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/danmu_accessibility" />
+        </service>
+    </application>
+
+</manifest>

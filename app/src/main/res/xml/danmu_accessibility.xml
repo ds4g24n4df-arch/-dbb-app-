@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  读屏采集的配置。
+
+  只订阅**抖音系**包名的窗口内容变化（packageNames），别的一概不看 ——
+  既省电，也是隐私上的底线：我们只读直播间的公屏，不读聊天、不读别的东西。
+
+  notificationTimeout 300ms：公屏刷得再快也是人眼能看的频率，300ms 足够，
+  再小只是白白唤醒。
+
+  如果以后要支持快手/视频号，packageNames 里加对应的包名即可
+  （快手 com.smile.gifmaker，视频号是微信 com.tencent.mm —— 微信那个太宽，
+  真要做得分页面判断，先不加）。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagReportViewIds"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_desc"
+    android:notificationTimeout="300"
+    android:packageNames="com.ss.android.ugc.aweme,com.ss.android.ugc.aweme.lite" />

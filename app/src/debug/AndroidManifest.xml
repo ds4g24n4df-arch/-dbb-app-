@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 只进调试包: 允许连模拟器里的 10.0.2.2 (这台电脑上开发用的接口服务, 没有 https); 正式包只走 https -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="@xml/network_security_config" />
+</manifest>
