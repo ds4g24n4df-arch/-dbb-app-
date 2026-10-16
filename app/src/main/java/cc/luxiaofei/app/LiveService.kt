@@ -11,6 +11,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.os.Build
@@ -98,7 +99,28 @@ class LiveService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(NOTIFY_ID, buildNotification())
+        /**
+         * 安卓 14+ 的硬规矩：清单里声明了 foregroundServiceType="mediaPlayback"，
+         * startForeground 就**必须把类型一起传进去** —— 不传会直接抛
+         * MissingForegroundServiceTypeException，服务当场死掉。
+         *
+         * 现场表现就是：**「本机出声」开着，却一点声音都没有**（服务没起来，
+         * 网页那边又按规矩让位了，于是两边都不出声）。
+         */
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFY_ID,
+                    buildNotification(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+                )
+            } else {
+                startForeground(NOTIFY_ID, buildNotification())
+            }
+        } catch (e: Throwable) {
+            // 兜底：万一某个系统不认这个类型，也别让服务死掉（退回不带类型的老写法）
+            runCatching { startForeground(NOTIFY_ID, buildNotification()) }
+        }
         isRunning = true
         // 播放循环跑在自己的线程上：绝不占主线程（不然界面和系统回调都会卡）
         worker.execute { loop() }
@@ -134,7 +156,6 @@ class LiveService : Service() {
         }
     }
 
-    /** 取一段、念一段；返回下一次轮询前等多久（毫秒）。 */
     private fun tick(): Long {
         // 1) 现在要播的这段：优先用预取好的（这就是"连续"的关键）
         val ready = takeReady()
