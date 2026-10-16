@@ -56,7 +56,8 @@ class MainActivity : ComponentActivity() {
             userAgentString = "$userAgentString DBBApp/${BuildConfig.VERSION_NAME}"
         }
         web.addJavascriptInterface(Bridge(), "DBBApp")
-        web.webViewClient = object : WebViewClient() {}
+            WebView.setWebContentsDebuggingEnabled(true)
+        web.webViewClient = WebDiag.client(this)
         web.webChromeClient = object : WebChromeClient() {}
         setContentView(web)
 
