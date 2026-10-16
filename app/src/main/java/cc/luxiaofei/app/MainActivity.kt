@@ -134,3 +134,82 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 }
+
+// ── 以下是「空白页看护」：加载失败 / 页面没渲染出来时给中文提示（原先想单独放 WebDiag.kt，
+//    这里直接放在同一个文件里，少一次"新建文件"的操作）──────────────────────────────
+object WebDiag {
+
+    private var helpShown = false
+
+    fun client(ctx: android.content.Context): android.webkit.WebViewClient =
+        object : android.webkit.WebViewClient() {
+
+            override fun onReceivedError(
+                view: android.webkit.WebView,
+                request: android.webkit.WebResourceRequest,
+                error: android.webkit.WebResourceError,
+            ) {
+                if (!request.isForMainFrame) return
+                val reason = error.description?.toString().orEmpty()
+                view.loadDataWithBaseURL(
+                    null,
+                    page(ctx, "连不上服务器", "先看看手机网络（Wi-Fi / 流量）是否正常，再点下面重试。", "原因：$reason"),
+                    "text/html", "utf-8", null,
+                )
+            }
+
+            override fun onPageFinished(view: android.webkit.WebView, url: String) {
+                if (helpShown) return
+                view.evaluateJavascript(PROBE) { raw ->
+                    val s = raw ?: ""
+                    if (helpShown) return@evaluateJavascript
+                    if (!(s.contains("\"n\":-1") || s.contains("\"n\":0") || s.contains("\"err\":"))) {
+                        return@evaluateJavascript
+                    }
+                    helpShown = true
+                    view.loadDataWithBaseURL(
+                        null,
+                        page(
+                            ctx,
+                            "网页没能显示出来",
+                            "这台手机的系统 WebView 可能太旧了：去应用商店更新「Android System WebView」" +
+                                "（有的机型叫「安卓系统WebView」）或 Chrome，再重新打开本 App。",
+                            "系统 WebView：${webViewVersion()}\n页面状态：${s.take(140)}",
+                        ),
+                        "text/html", "utf-8", null,
+                    )
+                }
+            }
+        }
+
+    private const val PROBE =
+        "(function(){try{var b=document.body;return JSON.stringify({n:b?b.innerText.replace(/\\s+/g,'').length:-1});}" +
+            "catch(e){return JSON.stringify({err:String(e&&e.message||e)});}})()"
+
+    @android.annotation.SuppressLint("NewApi")
+    fun webViewVersion(): String = try {
+        val p = android.webkit.WebView.getCurrentWebViewPackage()
+        if (p == null) "未知（系统没装 WebView？）" else "${p.packageName} ${p.versionName}"
+    } catch (e: Throwable) {
+        "未知（${e.javaClass.simpleName}）"
+    }
+
+    private fun page(ctx: android.content.Context, title: String, tip: String, detail: String): String {
+        val url = try { ctx.getString(R.string.start_url) } catch (e: Throwable) { "" }
+        return """
+            <!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1"><style>
+            body{margin:0;padding:56px 22px;background:#0b1220;color:#e8f0ff;text-align:center;
+            font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+            h1{font-size:17px;margin:0 0 12px}
+            p{font-size:13.5px;line-height:1.8;color:#9fb3d9;margin:8px 0;text-align:left}
+            .why{font-size:11px;color:#7d8fb3;margin-top:16px;word-break:break-all;text-align:left}
+            a{display:inline-block;margin-top:24px;padding:14px 28px;border-radius:14px;color:#fff;
+            text-decoration:none;font-size:15px;font-weight:600;background:linear-gradient(135deg,#4C1D95,#0EA5E9)}
+            </style></head><body><h1>$title</h1><p>$tip</p><p class="why">$detail</p>
+            <a href="$url">重新加载</a>
+            <p class="why">（一直这样就把这一屏截图发给客服，上面那行版本号能直接定位问题）</p>
+            </body></html>
+        """.trimIndent()
+    }
+}
