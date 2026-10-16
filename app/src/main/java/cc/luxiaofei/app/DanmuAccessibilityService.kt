@@ -67,6 +67,18 @@ class DanmuAccessibilityService : AccessibilityService() {
             "直播状态", "尝试邀请", "邀请其他", "PK一下", "人气", "经纪人", "助力",
             "去开通", "立即开通", "开通", "升级", "权益", "任务", "奖励", "规则说明",
             "榜单", "小时榜", "人气榜", "贡献榜", "点击", "立即", "推广", "官方",
+            // 观看人数这类也是界面文字：现场日志里抓到过「2051人看过」「2039人看过」，
+            // 它们被当弹幕收进来，把互动日志刷得全是"（无内容）"，真弹幕反而被埋掉。
+            "人看过", "人观看", "人正在看", "在线人数",
+        )
+
+        /**
+         * 抖音的按钮/入口名字，往往就是两三个字，和真弹幕长得一模一样 ——
+         * 所以这份**只在"整行完全相同"时才过滤**（不会误伤「有礼物吗」「怎么进购物车」这种真问题）。
+         */
+        private val UI_NOISE_EXACT = setOf(
+            "礼物", "表情入口", "小心心", "更多", "分享", "点赞", "关注", "购物车", "评论",
+            "观众头像", "按钮", "关闭", "举报", "设置", "榜单", "热榜",
         )
     }
 
@@ -158,6 +170,7 @@ class DanmuAccessibilityService : AccessibilityService() {
             val text = raw.trim().replace('\n', ' ').replace(Regex("\\s+"), " ")
             if (text.isEmpty() || text.length > MAX_TEXT_LEN) return@mapNotNull null
             if (UI_NOISE.any { text.contains(it) }) return@mapNotNull null
+            if (text in UI_NOISE_EXACT) return@mapNotNull null
             val kind = kindOf(text) ?: return@mapNotNull null
             if (seen.containsKey(text)) return@mapNotNull null
             seen[text] = now
@@ -165,7 +178,7 @@ class DanmuAccessibilityService : AccessibilityService() {
         }.take(MAX_EVENTS_PER_POST)
 
         // 自检：把"看到几行字、认出几行 + 样例"推到服务端（每 30 秒最多一条）。
-        // 这条自检在服务端被当"自检"处理：不念、不占回复节流、不计入"收多少条"。
+        // 这条自检写进互动日志、但不出声、不占回复节流、也不计入"收多少条"。
         diag("看到 " + texts.size + " 行字，认出 " + fresh.size + " 行｜样例：" +
             texts.take(10).map { it.take(20) }.joinToString(" / "))
 
@@ -252,8 +265,13 @@ class DanmuAccessibilityService : AccessibilityService() {
 
         val t = node.text?.toString()
         if (!t.isNullOrBlank()) out.add(t)
-        val d = node.contentDescription?.toString()
-        if (!d.isNullOrBlank()) out.add(d)
+        /**
+         * **故意不收 contentDescription** —— 这是这次定位到的真凶：
+         * 抖音把"礼物""表情入口""小心心""观众头像3，按钮"这些**控件说明**放在 contentDescription 里，
+         * 而观众发的话在 text 里。以前两样都收 → 日志里全是控件名词（现场截图就是
+         * 「观众：观众头像3，按钮」「表情入口」「小心心」），真弹幕反而被埋掉。
+         * 只收 text，控件那批自然就没了。
+         */
 
         for (i in 0 until node.childCount) {
             collect(node.getChild(i), depth + 1, out, count)
