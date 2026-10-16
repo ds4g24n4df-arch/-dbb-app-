@@ -122,8 +122,11 @@ class DanmuAccessibilityService : AccessibilityService() {
         }
 
         val now = System.currentTimeMillis()
-        // 清理 5 分钟没再出现过的记录，集合别无限长
-        seen.entries.removeAll { now - it.value > 5 * 60 * 1000 }
+        // 30 分钟（原来 5 分钟）：公屏是滚动列表，同一行能在屏幕上挂很久。
+        // 5 分钟的窗太短 —— 挂着的旧弹幕会被当成"新出现的"重新推一遍，
+        // 于是"收 N 条"里全是重复，而且每条都会去挤占 15 秒的回复节流，
+        // 真观众的提问反而被顶掉（现场就是"问了不回"）。
+        seen.entries.removeAll { now - it.value > 30 * 60 * 1000 }
 
         val fresh = texts.mapNotNull { raw ->
             val text = raw.trim().replace('\n', ' ').replace(Regex("\\s+"), " ")
@@ -135,7 +138,7 @@ class DanmuAccessibilityService : AccessibilityService() {
         }.take(MAX_EVENTS_PER_POST)
 
         // 自检：把"看到几行字、认出几行 + 样例"推到服务端（每 30 秒最多一条）。
-        // 诊断完这段可以删掉。
+        // 服务端已把它当"自检"处理：不念、不占回复节流、不计入"收多少条"。
         diag("看到 " + texts.size + " 行字，认出 " + fresh.size + " 行｜样例：" +
             texts.take(10).map { it.take(20) }.joinToString(" / "))
 
