@@ -83,21 +83,41 @@ class DanmuAccessibilityService : AccessibilityService() {
         if (now - lastScanAt < MIN_INTERVAL_MS) return
         lastScanAt = now
 
-        val root = rootInActiveWindow
-        if (root == null) {
-            pool.execute { diag("抖音事件到了，但拿不到窗口内容（root=null）") }
-            return
-        }
-        // 扫窗口、发请求都不在系统回调线程上做（不然手机会卡）
-        pool.execute { scanAndPush(root) }
+        // 扫窗口、发请求都不在系统回调线程上做（不然手机会卡）。
+        // 注意：这里**不**直接用 rootInActiveWindow —— 抖音每次切页、弹礼物动画、有悬浮层时，
+        // 它经常是 null（现场日志里就抓到过"抖音事件到了，但拿不到窗口内容（root=null）"）。
+        // 取窗口（含遍历所有窗口 + 重试）放在 scanAndPush 里做。
+        pool.execute { scanAndPush(pkg) }
     }
 
-    /** 扫一遍窗口，挑出"新出现的公屏文字"，成批发给入站接口。 */
-    private fun scanAndPush(root: AccessibilityNodeInfo) {
-        val texts = LinkedHashSet<String>()
-        try {
-            collect(root, 0, texts, intArrayOf(0))
-        } catch (_: Exception) {
+    /**
+     * 扫一遍窗口，挑出"新出现的公屏文字"，成批发给入站接口。
+     *
+     * 为什么按包名重新解析、还要重试：抖音切页 / 礼物动画 / 悬浮层期间 rootInActiveWindow 常为 null，
+     * 或者拿到的是别的窗口（输入法、系统浮层）。所以：
+     *   1. 先看当前活动窗口（包名对上就用）；
+     *   2. 不对就**遍历所有窗口**找抖音那个；
+     *   3. 都没有就隔 150ms 再试两次（抖音正在切页时，稍等一下就有了）。
+     */
+    private fun scanAndPush(pkg: String) {
+        var texts = LinkedHashSet<String>()
+        var root: AccessibilityNodeInfo? = null
+        for (attempt in 0..2) {
+            root = rootNodeFor(pkg)
+            texts = LinkedHashSet()
+            if (root != null) {
+                try {
+                    collect(root, 0, texts, intArrayOf(0))
+                } catch (_: Exception) {
+                    texts = LinkedHashSet()
+                }
+            }
+            if (texts.isNotEmpty()) break
+            if (attempt < 2) sleepQuiet(150L)
+        }
+
+        if (root == null) {
+            diag("抖音事件到了，但拿不到窗口内容（root=null）")
             return
         }
 
@@ -163,6 +183,35 @@ class DanmuAccessibilityService : AccessibilityService() {
             )
         } catch (_: Exception) {
             // 自检失败就算了，别影响正常采集
+        }
+    }
+
+    /**
+     * 找"抖音那个窗口"的内容根。
+     *
+     * 先看当前活动窗口（包名对上就用）；不对就遍历所有窗口找抖音的那个；
+     * 实在都没有就返回 null（调用方会重试 / 上报自检）。
+     */
+    private fun rootNodeFor(pkg: String): AccessibilityNodeInfo? {
+        val active = rootInActiveWindow
+        if (active != null && active.packageName?.toString() == pkg) return active
+        try {
+            for (w in windows) {
+                val r = w.root ?: continue
+                if (r.packageName?.toString() == pkg) return r
+            }
+        } catch (_: Exception) {
+            // windows 在个别 ROM 上会抛异常，忽略，退回 active
+        }
+        return active
+    }
+
+    /** 小睡（只在工作线程里用）。 */
+    private fun sleepQuiet(ms: Long) {
+        try {
+            Thread.sleep(ms)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
     }
 
