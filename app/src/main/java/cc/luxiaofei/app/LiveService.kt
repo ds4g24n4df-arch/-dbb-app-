@@ -156,7 +156,24 @@ class LiveService : Service() {
         }
     }
 
+    /** 取一段、念一段；返回下一次轮询前等多久（毫秒）。 */
     private fun tick(): Long {
+        /**
+         * 0) **先把"弹幕回答"播掉** —— 这是现场"话术有声音、弹幕回答没声音"的根因。
+         *
+         * 弹幕回答（以及进人/关注/点赞的播报）跟口播稿走的是**两条路**：
+         *   口播稿：/api/live/next?player=app  ← 原生取（就是本文件这条）
+         *   弹幕回答：/api/live/pending        ← 以前**只有网页**取
+         * 而「本机出声：开」时网页那一路已经让位了，于是弹幕回答**没人取**，
+         * 服务端记着"念了"，直播间里却一声都没有。
+         * 这里补上：每一轮先问一句有没有待念的互动，有就立刻插播，然后再接着念口播稿。
+         */
+        val reply = fetchPendingOne()
+        if (reply != null) {
+            playIt(reply.audio, reply.speed, reply.gain)
+            return 200L
+        }
+
         // 1) 现在要播的这段：优先用预取好的（这就是"连续"的关键）
         val ready = takeReady()
         val seg: Segment
@@ -248,6 +265,39 @@ class LiveService : Service() {
 
         val audio = ttsUrl(base, text, ref, kind, key, token) ?: return Fetched(null, ERROR_BACKOFF_MS)
         return Fetched(Segment(ref, speed, gain, gapMs, audio), 0L)
+    }
+
+    /**
+     * 取一条"待念的互动"（弹幕回答 / 进人 / 关注 / 点赞）。
+     *
+     * 接口和网页完全一样：POST /api/live/pending（取走即标记，不会两边念两遍）。
+     * 为什么必须有它：口播稿走 /api/live/next（原生取），弹幕回答走 /api/live/pending
+     * （**以前只有网页取**）。「本机出声：开」时网页那一路让位了 → 弹幕回答没人取，
+     * 服务端记着"念了"，直播间里一声都没有。这里补上，原生也去取。
+     */
+    private fun fetchPendingOne(): Segment? {
+        val base = Prefs.baseUrl(this).trimEnd('/')
+        val key = Prefs.deviceKey(this)
+        val token = Prefs.authToken(this)
+        if (key.isBlank()) return null
+
+        val raw = Http.postJson("$base/api/live/pending", "{}", key, token, 8_000) ?: return null
+        val items = try {
+            JSONObject(raw).optJSONArray("items")
+        } catch (e: Exception) {
+            null
+        } ?: return null
+        if (items.length() == 0) return null
+
+        val it = items.optJSONObject(0) ?: return null
+        val text = it.optString("text", "").trim()
+        if (text.isEmpty()) return null
+        val ref = it.optString("ref", "")
+        val kind = it.optString("kind", "reply")
+        val gain = it.optDouble("gain", 1.0)
+        // 弹幕回答插播时换气短一点：观众等着答案，别拖
+        val audio = ttsUrl(base, text, ref, kind, key, token) ?: return null
+        return Segment(ref, 1.0, gain, MIN_GAP_MS, audio)
     }
 
     /** 拿这段文字的可播地址（和网页同一个接口、同一套参数）。 */
