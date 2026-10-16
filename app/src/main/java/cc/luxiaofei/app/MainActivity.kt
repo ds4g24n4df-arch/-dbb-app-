@@ -58,6 +58,12 @@ class MainActivity : ComponentActivity() {
         web.addJavascriptInterface(Bridge(), "DBBApp")
             WebView.setWebContentsDebuggingEnabled(true)
         web.webViewClient = WebDiag.client(this)
+        /**
+         * WebView 自己**不会下载文件**：点「下载 App」和安装包直链，以前是**毫无反应**
+         * （现场反馈就是"点了没反应"）。这里把下载交给系统浏览器/系统下载器 ——
+         * 它会下完并引导安装，用户点两下就更新完了。
+         */
+        web.setDownloadListener { url, _, _, _, _ -> openOutside(url) }
         web.webChromeClient = object : WebChromeClient() {}
         setContentView(web)
 
@@ -65,6 +71,17 @@ class MainActivity : ComponentActivity() {
 
         // 前台服务：进程活着，锁屏/切抖音之后系统才不会随手把它回收掉
         startForegroundServiceCompat()
+    }
+
+    /** 用系统浏览器打开链接：App 里的 WebView 不能下载文件，必须交给系统。 */
+    private fun openOutside(url: String) {
+        try {
+            val i = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(i)
+        } catch (_: Exception) {
+            // 没装浏览器之类的极端情况：忽略，别把 App 崩了
+        }
     }
 
     private fun startForegroundServiceCompat() {
@@ -94,6 +111,7 @@ class MainActivity : ComponentActivity() {
             o.put("version", BuildConfig.VERSION_NAME)
             o.put("collectEnabled", Prefs.collectEnabled(applicationContext))
             o.put("accessibilityOn", DanmuAccessibilityService.isRunning)
+            o.put("speakServiceOn", LiveService.isRunning)
             o.put("hasIdentity", Prefs.hasIdentity(applicationContext))
             return o.toString()
         }
@@ -125,6 +143,12 @@ class MainActivity : ComponentActivity() {
                 i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(i)
             }
+        }
+
+        /** 让系统浏览器打开任意链接（页面上的"下载 App"用得到）。 */
+        @JavascriptInterface
+        fun openExternal(url: String) {
+            openOutside(url)
         }
     }
 
