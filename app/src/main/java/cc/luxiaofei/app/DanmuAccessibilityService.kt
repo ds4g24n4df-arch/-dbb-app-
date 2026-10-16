@@ -49,8 +49,10 @@ class DanmuAccessibilityService : AccessibilityService() {
     /** 最近见过的文本 → 时间。公屏是滚动列表，同一条会反复出现在节点里。 */
     private val seen = HashMap<String, Long>()
     private var lastScanAt = 0L
+
     /** 自检上报的节流时间（诊断用，见 diag()） */
     private var lastDiagAt = 0L
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         isRunning = true
@@ -70,30 +72,24 @@ class DanmuAccessibilityService : AccessibilityService() {
         val e = event ?: return
         val pkg = e.packageName?.toString() ?: return
         if (pkg !in TARGETS) return
-        if (!Prefs.collectEnabled(this)) return
-        if (!Prefs.hasIdentity(this)) return
+        if (!Prefs.collectEnabled(this) || !Prefs.hasIdentity(this)) {
+            pool.execute {
+                diag("抖音事件被开关挡住：采集开关=" + Prefs.collectEnabled(this) + "，身份=" + Prefs.hasIdentity(this))
+            }
+            return
+        }
 
         val now = System.currentTimeMillis()
         if (now - lastScanAt < MIN_INTERVAL_MS) return
         lastScanAt = now
 
-        val root = rootInActiveWindow ?: return
+        val root = rootInActiveWindow
+        if (root == null) {
+            pool.execute { diag("抖音事件到了，但拿不到窗口内容（root=null）") }
+            return
+        }
         // 扫窗口、发请求都不在系统回调线程上做（不然手机会卡）
-           override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        val e = event ?: return
-        val pkg = e.packageName?.toString() ?: return     ← 从这一行开始选
-        if (pkg !in TARGETS) return
-        if (!Prefs.collectEnabled(this)) return
-        if (!Prefs.hasIdentity(this)) return
-
-        val now = System.currentTimeMillis()
-        if (now - lastScanAt < MIN_INTERVAL_MS) return
-        lastScanAt = now
-
-        val root = rootInActiveWindow ?: return
-        // 扫窗口、发请求都不在系统回调线程上做（不然手机会卡）
-        pool.execute { scanAndPush(root) }                 ← 选到这一行结束
-    }
+        pool.execute { scanAndPush(root) }
     }
 
     /** 扫一遍窗口，挑出"新出现的公屏文字"，成批发给入站接口。 */
@@ -118,7 +114,7 @@ class DanmuAccessibilityService : AccessibilityService() {
             event(text, kind)
         }.take(MAX_EVENTS_PER_POST)
 
-            // 自检：把"看到几行字、认出几行 + 样例"推到服务端（每 30 秒最多一条）。
+        // 自检：把"看到几行字、认出几行 + 样例"推到服务端（每 30 秒最多一条）。
         // 诊断完这段可以删掉。
         diag("看到 " + texts.size + " 行字，认出 " + fresh.size + " 行｜样例：" +
             texts.take(10).map { it.take(20) }.joinToString(" / "))
@@ -147,7 +143,7 @@ class DanmuAccessibilityService : AccessibilityService() {
         )
     }
 
-    /** 深度优先收集文本，限深限量。 */    /**
+    /**
      * 自检上报：只用于排查"读屏到底读到了什么"。
      * 节流 30 秒，最多带一小段样例文字，推到同一个入站接口，界面上能直接看到。
      */
@@ -170,6 +166,7 @@ class DanmuAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** 深度优先收集文本，限深限量。 */
     private fun collect(node: AccessibilityNodeInfo?, depth: Int, out: MutableSet<String>, count: IntArray) {
         if (node == null || depth > 24 || count[0] >= MAX_NODES) return
         count[0]++
