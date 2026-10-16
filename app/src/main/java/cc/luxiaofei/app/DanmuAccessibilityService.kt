@@ -34,14 +34,40 @@ class DanmuAccessibilityService : AccessibilityService() {
         /** 抖音系包名（无障碍配置里已经限定，这里再兜一层，防止别的事件漏进来） */
         private val TARGETS = setOf("com.ss.android.ugc.aweme", "com.ss.android.ugc.aweme.lite")
 
-        /** 一次扫窗口最多看多少个节点：够覆盖公屏，又不会卡 */
-        private const val MAX_NODES = 600
+        /**
+         * 一次扫窗口最多看多少个节点。
+         *
+         * 600 太小了 —— 现场日志揭穿了后果：抖音屏幕上"顶部提示条/功能推广"排在前面，
+         * 扫到 600 个节点就停了，**底部的公屏弹幕区根本没扫到**。于是"收 326 条"里
+         * 全是「你当前的直播状态较好…」「开启AI经纪人…」这种界面文字，
+         * 真观众的提问一条都没上来 —— 表现就是"问了不回"。
+         * 放到 1500：能扫到底部的弹幕列表；再配合界面文字黑名单（见 UI_NOISE），
+         * 既读得到真弹幕，又不会把垃圾灌进去。
+         */
+        private const val MAX_NODES = 1500
         /** 一次最多往里推几条：一批推多了会挤掉正在念的口播稿 */
         private const val MAX_EVENTS_PER_POST = 5
         /** 文本多短才算"公屏那一行的字"（太长的多半是公告/标题） */
         private const val MAX_TEXT_LEN = 60
         /** 两次扫窗口的最小间隔，公屏刷得再快也不用人眼跟不上的频率去扫 */
         private const val MIN_INTERVAL_MS = 400L
+
+        /**
+         * 这些是**抖音自己的界面文字，不是观众发的弹幕** —— 现场日志里抓到的原文：
+         *   「你当前的直播状态较好，尝试邀请其他主播PK一下，有助于提升人气收入哦」
+         *   「开启AI经纪人，人气翻倍」
+         *   「商超零售-鹏哥」（昵称/榜单那类）
+         * 它们被当成弹幕收进来之后，把"收多少条"刷虚、把互动日志冲得看不清真问题，
+         * 还白占服务端的判定。命中这些词的行直接不推 —— 宁可少几条，也别让垃圾盖住真弹幕。
+         *
+         * 注意：**只过滤"抖音运营/推广"这类明显的界面词**，不按"像不像昵称"过滤 ——
+         * 「多少钱」这种真弹幕长得也像昵称，一过滤就会把真问题漏掉。
+         */
+        private val UI_NOISE = listOf(
+            "直播状态", "尝试邀请", "邀请其他", "PK一下", "人气", "经纪人", "助力",
+            "去开通", "立即开通", "开通", "升级", "权益", "任务", "奖励", "规则说明",
+            "榜单", "小时榜", "人气榜", "贡献榜", "点击", "立即", "推广", "官方",
+        )
     }
 
     private val pool = Executors.newSingleThreadExecutor()
@@ -131,6 +157,7 @@ class DanmuAccessibilityService : AccessibilityService() {
         val fresh = texts.mapNotNull { raw ->
             val text = raw.trim().replace('\n', ' ').replace(Regex("\\s+"), " ")
             if (text.isEmpty() || text.length > MAX_TEXT_LEN) return@mapNotNull null
+            if (UI_NOISE.any { text.contains(it) }) return@mapNotNull null
             val kind = kindOf(text) ?: return@mapNotNull null
             if (seen.containsKey(text)) return@mapNotNull null
             seen[text] = now
@@ -138,7 +165,7 @@ class DanmuAccessibilityService : AccessibilityService() {
         }.take(MAX_EVENTS_PER_POST)
 
         // 自检：把"看到几行字、认出几行 + 样例"推到服务端（每 30 秒最多一条）。
-        // 服务端已把它当"自检"处理：不念、不占回复节流、不计入"收多少条"。
+        // 这条自检在服务端被当"自检"处理：不念、不占回复节流、不计入"收多少条"。
         diag("看到 " + texts.size + " 行字，认出 " + fresh.size + " 行｜样例：" +
             texts.take(10).map { it.take(20) }.joinToString(" / "))
 
