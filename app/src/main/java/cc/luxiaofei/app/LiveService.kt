@@ -38,27 +38,19 @@ class LiveService : Service() {
         private const val CHANNEL_ID = "dbb-live"
         private const val NOTIFY_ID = 1001
 
-        /** 空闲时多久问一次"有没有在播"（没开播时服务端会很快回，代价很小） */
         private const val IDLE_POLL_MS = 3000L
-        /** 出错（网络/接口）后的退避，别把手机和服务器都刷爆 */
         private const val ERROR_BACKOFF_MS = 5000L
-        /** 单条 TTS 最多等多久 */
         private const val TTS_TIMEOUT_MS = 25_000
-        /** 等预取结果最多等多久（等不到就按空档走，下一轮重新取） */
         private const val PREFETCH_WAIT_SEC = 12L
-        /** 单条音频最多放多久（兜底，防止播放器卡住不回调） */
         private const val PLAY_TIMEOUT_SEC = 180L
-        /** 两次播放之间最短/最长的换气停顿（服务端给的 gapSec 也会被夹在这个区间里） */
         private const val MIN_GAP_MS = 120L
         private const val MAX_GAP_MS = 3000L
 
-        /** 别的组件想知道服务在不在（页面显示状态用） */
         @Volatile
         var isRunning: Boolean = false
             private set
     }
 
-    /** 一段可以马上播的内容：文本、音色、语速/音量、换气时长、可播地址。 */
     private class Segment(
         val ref: String,
         val speed: Double,
@@ -67,36 +59,23 @@ class LiveService : Service() {
         val audio: String,
     )
 
-    /** 一次取稿的结果：要么拿到可播的一段，要么说明"该等多久再试"。 */
     private class Fetched(val segment: Segment?, val waitMs: Long)
 
     private val worker = Executors.newSingleThreadExecutor()
-
-    /** 预取专用线程：播放时它同时在把下一段取回来合成 */
     private val prefetcher = Executors.newSingleThreadExecutor()
 
     @Volatile
     private var alive = true
 
-    /** 正在放的播放器（onDestroy 要收掉，不然会漏音） */
     @Volatile
     private var player: MediaPlayer? = null
 
-    /** 上次"问服务端该不该报时"的时间（见 askClockIfDue） */
     @Volatile
     private var lastClockAskAt = 0L
 
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        /**
-         * 安卓 14+ 的硬规矩：清单里声明了 foregroundServiceType="mediaPlayback"，
-         * startForeground 就**必须把类型一起传进去** —— 不传会直接抛
-         * MissingForegroundServiceTypeException，服务当场死掉。
-         *
-         * 现场表现就是：**「本机出声」开着，却一点声音都没有**（服务没起来，
-         * 网页那边又按规矩让位了，于是两边都不出声）。
-         */
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
@@ -108,17 +87,14 @@ class LiveService : Service() {
                 startForeground(NOTIFY_ID, buildNotification())
             }
         } catch (e: Throwable) {
-            // 兜底：万一某个系统不认这个类型，也别让服务死掉（退回不带类型的老写法）
             runCatching { startForeground(NOTIFY_ID, buildNotification()) }
         }
         isRunning = true
         diag("原生播放服务已启动 v" + BuildConfig.VERSION_NAME)
-        // 播放循环跑在自己的线程上：绝不占主线程（不然界面和系统回调都会卡）
         worker.execute { loop() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // 被系统杀掉后自动重来：长播期间用户不该管这个
         return START_STICKY
     }
 
@@ -149,34 +125,17 @@ class LiveService : Service() {
 
     /** 取一段、念一段；返回下一次轮询前等多久（毫秒）。 */
     private fun tick(): Long {
-        /**
-         * 0) **先把"弹幕回答"播掉** —— 这是现场"话术有声音、弹幕回答没声音"的根因。
-         *
-         * 弹幕回答（以及进人/关注/点赞的播报）跟口播稿走的是**两条路**：
-         *   口播稿：/api/live/next?player=app  ← 原生取（就是本文件这条）
-         *   弹幕回答：/api/live/pending        ← 以前**只有网页**取
-         * 而「本机出声：开」时网页那一路已经让位了，于是弹幕回答**没人取**，
-         * 服务端记着"念了"，直播间里却一声都没有。
-         * 这里补上：每一轮先问一句有没有待念的互动，有就立刻插播，然后再接着念口播稿。
-         */
+        // 0) 先把"弹幕回答"播掉：它和口播稿是两条路，不先问就永远插不进来
         val reply = fetchPendingOne()
         if (reply != null) {
             playIt(reply.audio, reply.speed, reply.gain)
             return 200L
         }
 
-        /**
-         * 报时：**由原生这边定时去问**，真正的间隔由服务端按 pinClock 卡。
-         *
-         * 为什么不能只靠网页那一路的定时器：报时原来是网页里的一个 setInterval ——
-         * 但用户开播后就把 App 切到抖音了，**WebView 在后台会被系统冻住**，
-         * 定时器根本不跑，所以"昨天一次报时都没有"（现场反馈）。
-         * 原生这边的循环不受冻结影响，问一句"该报时了吗"最靠谱。
-         * 服务端自己会按间隔拦（回 triggered:false + 还需多少秒），所以问勤一点也没关系。
-         */
+        // 报时由原生定时去问，服务端按 pinClock 卡间隔
         askClockIfDue()
 
-        // 1) 现在要播的这段：优先用预取好的（这就是"连续"的关键）
+        // 1) 现在要播的这段：优先用预取好的
         val ready = takeReady()
         val seg: Segment
         if (ready != null) {
@@ -187,13 +146,13 @@ class LiveService : Service() {
             seg = got
         }
 
-        // 2) 开播之前先把**下一段**交出去合成：等这首放完，下一首往往已经好了
+        // 2) 开播之前先把下一段交出去合成
         val pending = startPrefetch()
 
         // 3) 放
         playIt(seg.audio, seg.speed, seg.gain)
 
-        // 4) 把预取结果收回来（此时多半已完成）
+        // 4) 把预取结果收回来
         collectPrefetch(pending)
 
         return seg.gapMs
@@ -210,7 +169,6 @@ class LiveService : Service() {
         return s
     }
 
-    /** 起一条后台线程去取下一段；返回这个任务，稍后用 collectPrefetch 收。 */
     private fun startPrefetch(): Future<Fetched>? {
         if (!alive) return null
         return try {
@@ -226,18 +184,16 @@ class LiveService : Service() {
             val got = pending.get(PREFETCH_WAIT_SEC, TimeUnit.SECONDS)
             if (got.segment != null) nextReady = got.segment
         } catch (e: Exception) {
-            // 预取没赶上：不管它，下一轮 tick 会重新取（只是这段会多等一次合成）
+            // 预取没赶上：下一轮重新取
         }
     }
 
     // ───────────────────────── 取稿 ─────────────────────────
 
-    /** 取下一段并把语音合成好（这一步就是那条"要好几秒"的活，所以放到预取线程里）。 */
     private fun fetchNext(): Fetched {
         val base = Prefs.baseUrl(this).trimEnd('/')
         val key = Prefs.deviceKey(this)
         val token = Prefs.authToken(this)
-        // 身份还没交接（App 里一次页面都没打开过）：等着，别白发请求
         if (key.isBlank()) return Fetched(null, IDLE_POLL_MS)
 
         val nextRaw = Http.postJson("$base/api/live/next?player=app", "{}", key, token, 8_000)
@@ -248,11 +204,8 @@ class LiveService : Service() {
             return Fetched(null, ERROR_BACKOFF_MS)
         }
 
-        // 这台手机被设成"不出声"：服务端没有推进游标，歇一会儿再看
         if (next.optBoolean("skip", false)) return Fetched(null, IDLE_POLL_MS)
-        // 到点自动关播：服务端正在收尾，这里歇着
         if (next.optBoolean("autoClose", false)) return Fetched(null, IDLE_POLL_MS)
-        // 没在播 / 队列为空（服务端会带 error）：歇一会儿
         if (next.has("error")) return Fetched(null, IDLE_POLL_MS)
 
         val seg = next.optJSONObject("segment") ?: return Fetched(null, IDLE_POLL_MS)
@@ -273,7 +226,7 @@ class LiveService : Service() {
         return Fetched(Segment(ref, speed, gain, gapMs, audio), 0L)
     }
 
-    /** 每 ~60 秒问一次服务端"该报时了吗"；念什么、隔多久，全由服务端按配置决定。 */
+    /** 每 ~60 秒问一次服务端"该报时了吗"。 */
     private fun askClockIfDue() {
         val now = System.currentTimeMillis()
         if (now - lastClockAskAt < 60_000L) return
@@ -292,8 +245,8 @@ class LiveService : Service() {
     /**
      * 取一条"待念的互动"（弹幕回答 / 进人 / 关注 / 点赞）。
      *
-     * 接口和网页完全一样：POST /api/live/pending（取走即标记，不会两边念两遍）。
-     * 取到第一条就把它的音频合成好返回；没有就返回 null，继续念口播稿。
+     * 取不到时会把原因报上去（"0 条" / "失败"），现场就能看出是
+     * **服务端不给** 还是 **取到了没播**。
      */
     private fun fetchPendingOne(): Segment? {
         val base = Prefs.baseUrl(this).trimEnd('/')
@@ -301,13 +254,21 @@ class LiveService : Service() {
         val token = Prefs.authToken(this)
         if (key.isBlank()) return null
 
-        val raw = Http.postJson("$base/api/live/pending", "{}", key, token, 8_000) ?: return null
+        val raw = Http.postJson("$base/api/live/pending", "{}", key, token, 8_000)
+        if (raw == null) {
+            diag("取回答失败（网络或被拒）")
+            return null
+        }
         val items = try {
             JSONObject(raw).optJSONArray("items")
         } catch (e: Exception) {
             null
         } ?: return null
-        if (items.length() == 0) return null
+        if (items.length() == 0) {
+            diag("取回答 → 0 条")
+            return null
+        }
+        diag("取回答 → " + items.length() + " 条")
 
         val it = items.optJSONObject(0) ?: return null
         val text = it.optString("text", "").trim()
@@ -315,7 +276,6 @@ class LiveService : Service() {
         val ref = it.optString("ref", "")
         val kind = it.optString("kind", "reply")
         val gain = it.optDouble("gain", 1.0)
-        // 弹幕回答插播时换气短一点：观众等着答案，别拖
         val audio = ttsUrl(base, text, ref, kind, key, token)
         if (audio == null) {
             diag("合成失败（这条放不出来）：" + text.take(30))
@@ -348,7 +308,7 @@ class LiveService : Service() {
 
     // ───────────────────────── 播放 ─────────────────────────
 
-    /** 放一段（放完才返回）。先把音频下载到本地再放，失败会写进互动日志。 */
+    /** 放一段（放完才返回）。先下载到本地再放，失败会写进互动日志。 */
     private fun playIt(url: String, speed: Double, gain: Double) {
         val mp = MediaPlayer()
         player = mp
@@ -416,10 +376,7 @@ class LiveService : Service() {
         }
     }
 
-    /**
-     * 自检上报：把原生这边发生了什么写进互动日志，页面上能直接看见。
-     * 以前放不出来时异常被吞掉，日志只写"念了"，分不清是合成、下载还是播放失败。
-     */
+    /** 自检上报：把原生这边发生了什么写进互动日志。 */
     private fun diag(msg: String) {
         val now = System.currentTimeMillis()
         if (now - lastDiagAt < 20_000L) return
@@ -458,7 +415,6 @@ class LiveService : Service() {
             NotificationChannel(
                 CHANNEL_ID,
                 getString(R.string.service_channel_name),
-                // LOW：这张卡片是"常驻状态"，不该每次变化都响一声
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
                 description = getString(R.string.service_channel_desc)
@@ -467,7 +423,6 @@ class LiveService : Service() {
     }
 
     private fun buildNotification(): AndroidNotification {
-        // 点通知回到 App（开播页面就在那里）
         val open = PendingIntent.getActivity(
             this,
             0,
