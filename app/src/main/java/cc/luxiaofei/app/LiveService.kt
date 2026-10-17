@@ -8,6 +8,7 @@ package cc.luxiaofei.app
 import android.app.Notification as AndroidNotification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.media.AudioManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
@@ -356,6 +357,23 @@ class LiveService : Service() {
     /** 放一段（放完才返回）。先下载到本地再放，失败会写进互动日志。 */
     private fun playIt(url: String, speed: Double, gain: Double) {
         val mp = MediaPlayer()
+                // 申请音频焦点：不然抖音一直占着音频，我们一放音就被掐掉
+        // （现场表现：回答刚开口就停，切回 App 才继续说）
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        var focus: AudioManager.AudioFocusRequest? = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            focus = AudioManager.AudioFocusRequest.Builder(
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+            )
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                )
+                .build()
+            am.requestAudioFocus(focus)
+        }
         player = mp
         var lock: PowerManager.WakeLock? = null
         try {
