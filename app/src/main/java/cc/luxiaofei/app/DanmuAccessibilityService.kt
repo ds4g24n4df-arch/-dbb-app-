@@ -301,7 +301,9 @@ class DanmuAccessibilityService : AccessibilityService() {
      */
     private fun kindOf(text: String): String? {
         return when {
-            text.contains("关注了") || text.contains("关注了主播") -> "follow"
+                        // 关注/点赞要**先判**：抖音显示的是「鹏哥 来了·新增关注」，
+            // 先命中"来了"就会被当成进人丢掉（进人欢迎是固定关闭的）→ 感谢语永远不出声。
+            text.contains("关注") || text.contains("新增关注") -> "follow"
             text.contains("点赞") || text.contains("点亮") -> "thumb"
             text.contains("来了") || text.contains("进入直播间") || text.contains("进来了") -> "welcome"
             // 纯数字/时间之类的界面文字，明显不是公屏内容
