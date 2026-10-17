@@ -423,10 +423,14 @@ class LiveService : Service() {
     }
 
     /** 把音频下载到缓存目录再放：云端地址是 302 跳转，直连播放在部分机型上会失败。 */
-    private fun downloadAudio(url: String): File? {
+        private fun downloadAudio(url: String): File? {
+        if (url.startsWith("/")) {
+            val local = File(url)
+            return if (local.exists() && local.length() > 1000) local else null
+        }
         var conn: java.net.HttpURLConnection? = null
         return try {
-            val f = File(cacheDir, "seg.mp3")
+            val f = File(cacheDir, "seg-" + System.nanoTime() + ".mp3")
             val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
             conn = c
             c.instanceFollowRedirects = true
@@ -441,10 +445,6 @@ class LiveService : Service() {
             runCatching { conn?.disconnect() }
         }
     }
-
-    /** 自检上报：把原生这边发生了什么写进互动日志。 */
-    private fun diag(msg: String) {
-        val now = System.currentTimeMillis()
         if (now - lastDiagAt < 20_000L) return
         lastDiagAt = now
         try {
