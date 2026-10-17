@@ -459,7 +459,8 @@ class LiveService : Service() {
             runCatching { conn?.disconnect() }
         }
     }
-    private fun diag(msg: String) {    
+    private fun diag(msg: String) {
+    val now = System.currentTimeMillis()
     if (now - lastDiagAt < 20_000L) return
         lastDiagAt = now
         try {
