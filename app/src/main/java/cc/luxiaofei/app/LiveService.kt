@@ -195,7 +195,20 @@ class LiveService : Service() {
 
     @Volatile
     private var replyPrefetching = false
+        /** 后台常驻：每 1.5 秒问一次待念，取到就下载到本地放进"已备好"。 */
+    private fun startReplyLoop() {
+        Thread {
+            while (alive) {
+                try {
+                    if (readyReply == null && !replyPrefetching) startReplyPrefetch()
+                } catch (e: Exception) {
+                }
+                sleep(1500)
+            }
+        }.start()
+    }
 
+    
     private fun startReplyPrefetch() {
         if (!alive || replyPrefetching || readyReply != null) return
         replyPrefetching = true
