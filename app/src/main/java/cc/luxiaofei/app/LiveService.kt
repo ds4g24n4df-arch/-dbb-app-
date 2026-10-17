@@ -96,6 +96,10 @@ class LiveService : Service() {
     @Volatile
     private var player: MediaPlayer? = null
 
+    /** 上次"问服务端该不该报时"的时间（见 askClockIfDue） */
+    @Volatile
+    private var lastClockAskAt = 0L
+
     override fun onCreate() {
         super.onCreate()
         createChannel()
@@ -173,6 +177,17 @@ class LiveService : Service() {
             playIt(reply.audio, reply.speed, reply.gain)
             return 200L
         }
+
+        /**
+         * 报时：**由原生这边定时去问**，真正的间隔由服务端按 pinClock 卡。
+         *
+         * 为什么不能只靠网页那一路的定时器：报时原来是网页里的一个 setInterval ——
+         * 但用户开播后就把 App 切到抖音了，**WebView 在后台会被系统冻住**，
+         * 定时器根本不跑，所以"昨天一次报时都没有"（现场反馈）。
+         * 原生这边的循环不受冻结影响，问一句"该报时了吗"最靠谱。
+         * 服务端自己会按间隔拦（回 triggered:false + 还需多少秒），所以问勤一点也没关系。
+         */
+        askClockIfDue()
 
         // 1) 现在要播的这段：优先用预取好的（这就是"连续"的关键）
         val ready = takeReady()
@@ -267,13 +282,27 @@ class LiveService : Service() {
         return Fetched(Segment(ref, speed, gain, gapMs, audio), 0L)
     }
 
+    /** 每 ~60 秒问一次服务端"该报时了吗"；念什么、隔多久，全由服务端按配置决定。 */
+    private fun askClockIfDue() {
+        val now = System.currentTimeMillis()
+        if (now - lastClockAskAt < 60_000L) return
+        lastClockAskAt = now
+        runCatching {
+            Http.postJson(
+                Prefs.baseUrl(this) + "/api/live/event",
+                "{\"kind\":\"clock\"}",
+                Prefs.deviceKey(this),
+                Prefs.authToken(this),
+                8_000,
+            )
+        }
+    }
+
     /**
      * 取一条"待念的互动"（弹幕回答 / 进人 / 关注 / 点赞）。
      *
      * 接口和网页完全一样：POST /api/live/pending（取走即标记，不会两边念两遍）。
-     * 为什么必须有它：口播稿走 /api/live/next（原生取），弹幕回答走 /api/live/pending
-     * （**以前只有网页取**）。「本机出声：开」时网页那一路让位了 → 弹幕回答没人取，
-     * 服务端记着"念了"，直播间里一声都没有。这里补上，原生也去取。
+     * 取到第一条就把它的音频合成好返回；没有就返回 null，继续念口播稿。
      */
     private fun fetchPendingOne(): Segment? {
         val base = Prefs.baseUrl(this).trimEnd('/')
