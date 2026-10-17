@@ -1,27 +1,3 @@
-# 在 GitHub 上免费编出安卓安装包（不用装任何软件）
-#
-# 本文件放在仓库 .github/workflows/ 下（文件名 .yml 结尾即可）。
-#
-# ── 每一版都照着一次真实失败改 ──
-#   v1 卡在"装安卓命令行工具"（镜像变了）→ 去掉那一步。
-#   v2 锁 ubuntu-24.04 + 装两个 Java。
-#   v3 用 $JAVA_HOME 记 Java 17 位置 + 环境自检。
-#   v4 把 Gradle 换成官方下载源（生效）+ 失败时把日志尾巴打进注释。
-#   v5 把 FAILURE 段打进注释 → **这次读到了真正的原因**：
-#        "Plugin [id: 'com.google.devtools.ksp', version: '2.3.12'] was not found"
-#        也就是 **KSP 插件在 CI 上拉不到**（它挂在阿里云镜像里还没有的新版本上）。
-#   v6 三件事：
-#     ① **编译前先把仓库换成官方源**（国外机器上，阿里云镜像里没有那些新插件）；
-#     ② **把这个 App 用不上的 KSP / Room 从工程里去掉**（我们没数据库，纯属模板自带的多余依赖）
-#        —— 这一步是在 CI 里改的，所以你**只需要改 main.yml 这一个文件**；
-#     ③ 失败时照样把 FAILURE 段打进注释，一眼能看原因。
-#   v7（本版）三件事：
-#     ① permissions 改成 contents: write（下面那步要创建 Release）；
-#     ② 版本号改用**流水线编号**（1.<次数>）：每次编译都不一样，
-#        App 里才能判断"我装的这版是不是比线上旧"；
-#     ③ 编译完把安装包**挂成"最新版"Release**：手机免登录直链下载
-#        （Artifacts 下载必须登录 GitHub，客户用不了；Release 资产是公开直链）。
-
 name: 编译安卓安装包
 
 on:
@@ -38,12 +14,11 @@ jobs:
       - name: 取出仓库里的代码
         uses: actions/checkout@v4
 
-      - name: 换官方仓库 + 去掉用不上的 KSP/Room
+      - name: 换官方源（去掉用不上的 KSP / Room）
         run: |
           python3 - <<'PY'
           import pathlib, re
 
-          # ① 阿里云镜像换成官方仓库：它们在国外机器上反而缺新版插件
           p = pathlib.Path("settings.gradle.kts")
           s = p.read_text(encoding="utf-8")
           s = s.replace("https://maven.aliyun.com/repository/google", "https://dl.google.com/dl/android/maven2")
@@ -51,7 +26,6 @@ jobs:
           s = s.replace("https://maven.aliyun.com/repository/gradle-plugin", "https://plugins.gradle.org/m2")
           p.write_text(s, encoding="utf-8")
 
-          # ② 去掉 KSP / Room：这个 App 没有数据库，用不上它们
           for f in ["build.gradle.kts", "app/build.gradle.kts"]:
               q = pathlib.Path(f)
               t = q.read_text(encoding="utf-8")
@@ -59,157 +33,38 @@ jobs:
               t = re.sub(r"^[ \t]*room \{[\s\S]*?^\}\n", "", t, flags=re.M)
               t = re.sub(r"^[ \t]*(ksp|implementation)\(libs\.androidx\.room[^\n]*\n", "", t, flags=re.M)
               q.write_text(t, encoding="utf-8")
-
-          print("--- 根 build.gradle.kts ---")
-          print(pathlib.Path("build.gradle.kts").read_text(encoding="utf-8"))
-          print("--- 还残留的 ksp/room 行 ---")
-          for f in ["build.gradle.kts", "app/build.gradle.kts"]:
-              hits = [l for l in pathlib.Path(f).read_text(encoding="utf-8").splitlines() if "ksp" in l or "room" in l]
-              print(f, "->", hits if hits else "（干净）")
+          print("官方源 + 去掉 KSP/Room 完成")
           PY
 
-      - name: 空白页的看护（WebView）+ 版本号
+      - name: App 图标换成品牌图
         run: |
-          # ① 新增 WebDiag.kt：连不上 / 页面没渲染出来时给中文提示 + 重新加载，
-          #    并把「系统 WebView 版本」打在屏幕上（用户截图一发就知道是不是它太旧）
-          cat > app/src/main/java/cc/luxiaofei/app/WebDiag.kt <<'KOT'
-          package cc.luxiaofei.app
+          cd app/src/main/res
+          ICON="https://luffy-agent-platform.oss-cn-beijing.aliyuncs.com/apps/22dc5b0958c14e549d6ba5dec1eb09d7/images/d32e4cec-922f-413b-a5e2-25397db0e027.png"
+          for d in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+            size="${d#*:}"; den="${d%%:*}"
+            mkdir -p "mipmap-$den"
+            curl -sSL -o "mipmap-$den/ic_launcher.png" "$ICON?x-oss-process=image/resize,w_$size"
+            cp "mipmap-$den/ic_launcher.png" "mipmap-$den/ic_launcher_round.png"
+          done
+          rm -f mipmap-anydpi/ic_launcher.xml
+          echo "图标已换成品牌图（5 个尺寸）"
 
-          import android.annotation.SuppressLint
-          import android.content.Context
-          import android.webkit.WebResourceError
-          import android.webkit.WebResourceRequest
-          import android.webkit.WebView
-          import android.webkit.WebViewClient
-
-          /**
-           * WebView 看护：加载失败、或页面根本没渲染出来时，别留一张空白页。
-           *
-           * 真机反馈的「App 打开一片空白」有两种原因，处理完全不同：
-           *   ① 连不上（断网 / 域名 / 证书）→ 系统会回调 onReceivedError，这里换成中文提示；
-           *   ② 连上了但页面没渲染（手机的系统 WebView 太旧，跑不动现代网页）→ 不报错、只是空白，
-           *      只能主动探一次正文长度判断，然后提示「去更新 Android System WebView」，
-           *      并把**系统 WebView 的版本**打在屏幕上 —— 用户截图一发就能定位。
-           */
-          object WebDiag {
-
-              /** 只提示一次，别把用户困在提示页 */
-              private var helpShown = false
-
-              fun client(ctx: Context): WebViewClient = object : WebViewClient() {
-
-                  override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                      if (!request.isForMainFrame) return // 只管主页面
-                      val reason = error.description?.toString().orEmpty()
-                      view.loadDataWithBaseURL(
-                          null,
-                          page(ctx, "连不上服务器", "先看看手机网络（Wi-Fi / 流量）是否正常，再点下面重试。", "原因：$reason"),
-                          "text/html", "utf-8", null,
-                      )
-                  }
-
-                  override fun onPageFinished(view: WebView, url: String) {
-                      if (helpShown) return
-                      view.evaluateJavascript(PROBE) { raw ->
-                          val s = raw ?: ""
-                          if (helpShown) return@evaluateJavascript
-                          if (!(s.contains("\"n\":-1") || s.contains("\"n\":0") || s.contains("\"err\":"))) return@evaluateJavascript
-                          helpShown = true
-                          view.loadDataWithBaseURL(
-                              null,
-                              page(
-                                  ctx,
-                                  "网页没能显示出来",
-                                  "这台手机的系统 WebView 可能太旧了：去应用商店更新「Android System WebView」" +
-                                      "（有的机型叫「安卓系统WebView」）或 Chrome，再重新打开本 App。",
-                                  "系统 WebView：${webViewVersion()}\n页面状态：${s.take(140)}",
-                              ),
-                              "text/html", "utf-8", null,
-                          )
-                      }
-                  }
-              }
-
-              /** 探页面渲染没有：正文字符数（-1 = 连 body 都没有） */
-              private const val PROBE =
-                  "(function(){try{var b=document.body;return JSON.stringify({n:b?b.innerText.replace(/\\s+/g,'').length:-1});}" +
-                      "catch(e){return JSON.stringify({err:String(e&&e.message||e)});}})()"
-
-              /** 系统 WebView 的包名 + 版本（要更新的就是它） */
-              @SuppressLint("NewApi")
-              fun webViewVersion(): String = try {
-                  val p = WebView.getCurrentWebViewPackage()
-                  if (p == null) "未知（系统没装 WebView？）" else "${p.packageName} ${p.versionName}"
-              } catch (e: Throwable) {
-                  "未知（${e.javaClass.simpleName}）"
-              }
-
-              private fun page(ctx: Context, title: String, tip: String, detail: String): String {
-                  val url = try { ctx.getString(R.string.start_url) } catch (e: Throwable) { "" }
-                  return """
-                      <!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-                      <meta name="viewport" content="width=device-width,initial-scale=1"><style>
-                      body{margin:0;padding:56px 22px;background:#0b1220;color:#e8f0ff;text-align:center;
-                      font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif}
-                      h1{font-size:17px;margin:0 0 12px}
-                      p{font-size:13.5px;line-height:1.8;color:#9fb3d9;margin:8px 0;text-align:left}
-                      .why{font-size:11px;color:#7d8fb3;margin-top:16px;word-break:break-all;text-align:left}
-                      a{display:inline-block;margin-top:24px;padding:14px 28px;border-radius:14px;color:#fff;
-                      text-decoration:none;font-size:15px;font-weight:600;background:linear-gradient(135deg,#4C1D95,#0EA5E9)}
-                      </style></head><body><h1>$title</h1><p>$tip</p><p class="why">$detail</p>
-                      <a href="$url">重新加载</a>
-                      <p class="why">（一直这样就把这一屏截图发给客服，上面那行版本号能直接定位问题）</p>
-                      </body></html>
-                  """.trimIndent()
-              }
-          }
-          KOT
-
-          # ② 改 MainActivity / 清单 / 版本号
+      - name: 版本号按流水线编号往上加
+        run: |
           python3 - <<'PY'
-          import pathlib, re
-
-          main = pathlib.Path("app/src/main/java/cc/luxiaofei/app/MainActivity.kt")
-          t = main.read_text(encoding="utf-8")
-          if "WebDiag" not in t:
-              anchor = "        web.webViewClient = object : WebViewClient() {}"
-              if anchor in t:
-                  t = t.replace(anchor,
-                      "        WebView.setWebContentsDebuggingEnabled(true)\n"
-                      "        web.webViewClient = WebDiag.client(this)", 1)
-                  print("MainActivity：webViewClient → WebDiag.client(this)")
-              else:
-                  print("没找到 webViewClient 那一行，请人工确认")
-          if "useWideViewPort" not in t:
-              t = t.replace("            javaScriptEnabled = true",
-                  "            javaScriptEnabled = true\n"
-                  "            useWideViewPort = true\n"
-                  "            loadWithOverviewMode = true\n"
-                  "            setSupportZoom(false)", 1)
-              print("已补上「认手机宽度」三行")
-          main.write_text(t, encoding="utf-8")
-
-          m = pathlib.Path("app/src/main/AndroidManifest.xml")
-          ms = m.read_text(encoding="utf-8")
-          if "hardwareAccelerated" not in ms:
-              ms = ms.replace('        android:supportsRtl="true"',
-                              '        android:supportsRtl="true"\n        android:hardwareAccelerated="true"')
-              m.write_text(ms, encoding="utf-8")
-              print("已显式打开硬件加速")
-
+          import pathlib, re, os
           q = pathlib.Path("app.properties")
           v = q.read_text(encoding="utf-8")
-          import os
           n = os.environ.get("GITHUB_RUN_NUMBER", "0")
           v = re.sub(r"versionCode=\d+", f"versionCode={n}", v)
           v = re.sub(r"versionName=[\d.]+", f"versionName=1.{n}", v)
           q.write_text(v, encoding="utf-8")
           for line in v.splitlines():
-              if line.startswith("versionCode") or line.startswith("versionName"):
+              if line.startswith(("versionCode", "versionName")):
                   print(line)
           PY
 
-      - name: 把 Gradle 换成官方下载源
+      - name: Gradle 换官方下载源
         run: |
           sed -i 's|^distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-9.8.1-bin.zip|' gradle/wrapper/gradle-wrapper.properties
           sed -i '/^distributionSha256Sum=/d' gradle/wrapper/gradle-wrapper.properties
@@ -228,7 +83,6 @@ jobs:
             J17=$(ls -d "${RUNNER_TOOL_CACHE}"/Java_Temurin*/17* 2>/dev/null | head -1)
           fi
           echo "JAVA17=$J17" >> "$GITHUB_ENV"
-          echo "17 的位置：$J17"
           "$J17/bin/java" -version || true
 
       - name: 装 Java 21（Gradle 用）
@@ -236,18 +90,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-
-      - name: 接受安卓许可并补上 SDK 组件
-        run: |
-          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
-          echo "SDK=$SDK"
-          ls "$SDK" 2>/dev/null || true
-          SDKMGR=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
-          echo "sdkmanager=$SDKMGR"
-          if [ -n "$SDKMGR" ]; then
-            yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
-            "$SDKMGR" --install "platforms;android-37" "build-tools;36.0.0" 2>&1 | tail -5 || true
-          fi
 
       - name: 缓存依赖与签名钥匙
         uses: actions/cache@v4
@@ -260,25 +102,14 @@ jobs:
           restore-keys: |
             dbb-android-
 
-      - name: 环境自检
-        run: |
-          java -version || true
-          echo "JAVA17=$JAVA17"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          ls "$ANDROID_SDK_ROOT/platforms" 2>/dev/null || true
-
       - name: 开始编译
         run: |
           set -o pipefail
           chmod +x ./gradlew
           if ! ./gradlew assembleDebug --no-daemon --stacktrace \
                  -Dorg.gradle.java.installations.paths="$JAVA17" 2>&1 | tee build.log; then
-            echo "::error::==== 失败原因（日志里的 FAILURE 段）===="
+            echo "::error::==== 失败原因 ===="
             awk '/^FAILURE:/{f=1} f' build.log | head -25 | sed '/^[[:space:]]*$/d' | while IFS= read -r l; do
-              echo "::error::$l"
-            done
-            echo "::error::==== 关键行 ===="
-            grep -nE "What went wrong|Could not|error:|Failed to|not found|No matching|licen[cs]e|Unsupported|incompatible|requires" build.log | tail -12 | while IFS= read -r l; do
               echo "::error::$l"
             done
             exit 1
