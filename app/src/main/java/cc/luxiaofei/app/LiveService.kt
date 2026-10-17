@@ -459,7 +459,8 @@ class LiveService : Service() {
             runCatching { conn?.disconnect() }
         }
     }
-        if (now - lastDiagAt < 20_000L) return
+    private fun diag(msg: String) {    
+    if (now - lastDiagAt < 20_000L) return
         lastDiagAt = now
         try {
             val body = "{\"events\":[{\"kind\":\"bullet\",\"nickname\":\"原生自检\",\"question\":\"" +
