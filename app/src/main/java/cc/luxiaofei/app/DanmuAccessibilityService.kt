@@ -166,9 +166,8 @@ class DanmuAccessibilityService : AccessibilityService() {
         // 真观众的提问反而被顶掉（现场就是"问了不回"）。
         seen.entries.removeAll { now - it.value > 30 * 60 * 1000 }
 
-        val fresh = texts.mapNotNull { raw ->       
-            val freshTexts = ArrayList<String>()        
-            val freshTexts = ArrayList<String>()
+            val freshTexts = ArrayList<String>()    
+            val fresh = texts.mapNotNull { raw ->       
             val text = raw.trim().replace('\n', ' ').replace(Regex("\\s+"), " ")
             if (text.isEmpty() || text.length > MAX_TEXT_LEN) return@mapNotNull null
             if (UI_NOISE.any { text.contains(it) }) return@mapNotNull null
@@ -176,6 +175,7 @@ class DanmuAccessibilityService : AccessibilityService() {
             val kind = kindOf(text) ?: return@mapNotNull null
             if (seen.containsKey(text)) return@mapNotNull null
             seen[text] = now
+            freshTexts.add(text)
             event(text, kind)
         }.take(MAX_EVENTS_PER_POST)
 
