@@ -51,7 +51,7 @@ class LiveService : Service() {
             private set
     }
 
-    private class Segment(
+       private data class Segment(
         val ref: String,
         val speed: Double,
         val gain: Double,
@@ -125,7 +125,12 @@ class LiveService : Service() {
 
     /** 取一段、念一段；返回下一次轮询前等多久（毫秒）。 */
     private fun tick(): Long {
-        // 0) 先把"弹幕回答"播掉：它和口播稿是两条路，不先问就永远插不进来
+                // 0) 先把"弹幕回答"播掉：它和口播稿是两条路，不先问就永远插不进来
+        val readyReply = takeReadyReply()
+        if (readyReply != null) {
+            playIt(readyReply.audio, readyReply.speed, readyReply.gain)
+            return 200L
+        }
         val reply = fetchPendingOne()
         if (reply != null) {
             playIt(reply.audio, reply.speed, reply.gain)
@@ -176,6 +181,46 @@ class LiveService : Service() {
         } catch (e: Exception) {
             null
         }
+    }
+    /**
+     * 提前把「下一条弹幕回答」准备成可直接播的本地文件。
+     *
+     * 以前是这句话念完才去取回答 → 现合成 2~3 秒 + 现下载 1 秒，
+     * 于是回答开口前有一大段静音。现在趁念话术的时间就合成+下载好，
+     * 这句一完直接开播（静音约 0.2 秒）。
+     */
+    @Volatile
+    private var readyReply: Segment? = null
+
+    @Volatile
+    private var replyPrefetching = false
+
+    private fun startReplyPrefetch() {
+        if (!alive || replyPrefetching || readyReply != null) return
+        replyPrefetching = true
+        try {
+            prefetcher.submit {
+                try {
+                    val s = fetchPendingOne()
+                    if (s != null) {
+                        val file = downloadAudio(s.audio)
+                        if (file != null) readyReply = s.copy(audio = file.absolutePath)
+                    }
+                } catch (e: Exception) {
+                    // 预热失败不影响主线：真要播时还会再取一次
+                } finally {
+                    replyPrefetching = false
+                }
+            }
+        } catch (e: Exception) {
+            replyPrefetching = false
+        }
+    }
+
+    private fun takeReadyReply(): Segment? {
+        val s = readyReply
+        readyReply = null
+        return s
     }
 
     private fun collectPrefetch(pending: Future<Fetched>?) {
