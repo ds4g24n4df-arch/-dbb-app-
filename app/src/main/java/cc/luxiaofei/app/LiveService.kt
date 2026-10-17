@@ -94,6 +94,7 @@ class LiveService : Service() {
         isRunning = true
         diag("原生播放服务已启动 v" + BuildConfig.VERSION_NAME)
         worker.execute { loop() }
+                startReplyLoop()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
