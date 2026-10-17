@@ -10,14 +10,17 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -28,23 +31,6 @@ import java.util.concurrent.TimeUnit
  *
  * 为什么要把"念"搬到原生：网页里的 JS 计时器在后台会被系统降频甚至冷冻 ——
  * 一开抖音直播（我们 App 就退到后台了），"网页自己一句一句往下念"就会变慢、甚至停住。
- * 所以播放循环放在原生：只要服务还活着，**抖音在前台、屏幕锁着，它都照念**。
- *
- * 取稿子的接口和网页完全一样（/api/live/next → /api/tts），所以音色、话术、节奏、
- * 算力计费全都不变；变的只是"谁来放这一段"。
- *
- * **连续**是怎么做到的（老板的硬要求：不能一句一顿）：
- *   播当前这句的同时，另一条线程已经去把**下一句**取回来 + 合成好了（见 prefetch）。
- *   所以正常情况下两句之间只留 gapSec 的换气停顿，不用等合成（单句冷合成要好几秒）。
- *
- * 三个关键约定：
- *   1. 取稿子时带 `?player=app`：服务端据此知道"这是手机原生在取"。如果这台手机被设成
- *      「本机出声：关」（账号设置 appSpeak=false），服务端会回 `{skip:true}` 且**不推进游标** ——
- *      队列是共用的，推进了就等于"把这句吃掉又不念"，另一台设备再也拿不到它。
- *   2. 取回来的段先放进 nextReady，再开始播；播放前先把下一段交出去合成。
- *   3. 任何一步出错都只退避重试，绝不退出循环 —— 直播中途"停了不念"是最严重的事故。
- *
- * 通知栏那张卡片是安卓对前台服务的要求（顺便也是用户的"我还在播"提示）。
  */
 class LiveService : Service() {
 
@@ -126,6 +112,7 @@ class LiveService : Service() {
             runCatching { startForeground(NOTIFY_ID, buildNotification()) }
         }
         isRunning = true
+        diag("原生播放服务已启动 v" + BuildConfig.VERSION_NAME)
         // 播放循环跑在自己的线程上：绝不占主线程（不然界面和系统回调都会卡）
         worker.execute { loop() }
     }
@@ -278,7 +265,11 @@ class LiveService : Service() {
         val gain = next.optDouble("gain", 1.0)
         val gapMs = (next.optDouble("gapSec", 0.3) * 1000).toLong().coerceIn(MIN_GAP_MS, MAX_GAP_MS)
 
-        val audio = ttsUrl(base, text, ref, kind, key, token) ?: return Fetched(null, ERROR_BACKOFF_MS)
+        val audio = ttsUrl(base, text, ref, kind, key, token)
+        if (audio == null) {
+            diag("合成失败（这段放不出来）：" + text.take(30))
+            return Fetched(null, ERROR_BACKOFF_MS)
+        }
         return Fetched(Segment(ref, speed, gain, gapMs, audio), 0L)
     }
 
@@ -325,7 +316,11 @@ class LiveService : Service() {
         val kind = it.optString("kind", "reply")
         val gain = it.optDouble("gain", 1.0)
         // 弹幕回答插播时换气短一点：观众等着答案，别拖
-        val audio = ttsUrl(base, text, ref, kind, key, token) ?: return null
+        val audio = ttsUrl(base, text, ref, kind, key, token)
+        if (audio == null) {
+            diag("合成失败（这条放不出来）：" + text.take(30))
+            return null
+        }
         return Segment(ref, 1.0, gain, MIN_GAP_MS, audio)
     }
 
@@ -353,43 +348,97 @@ class LiveService : Service() {
 
     // ───────────────────────── 播放 ─────────────────────────
 
-    /** 放一段（放完才返回）。语速/音量按服务端给的参数走，和网页那套一致。 */
+    /** 放一段（放完才返回）。先把音频下载到本地再放，失败会写进互动日志。 */
     private fun playIt(url: String, speed: Double, gain: Double) {
-        val done = CountDownLatch(1)
         val mp = MediaPlayer()
         player = mp
+        var lock: PowerManager.WakeLock? = null
         try {
+            lock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "dbb:play")
+                .apply { acquire(PLAY_TIMEOUT_SEC * 1000L) }
+
+            val file = downloadAudio(url)
+            if (file == null) {
+                diag("音频下载失败：" + url.takeLast(40))
+                return
+            }
+
             mp.setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build(),
             )
-            mp.setDataSource(url)
+            mp.setDataSource(file.absolutePath)
+            val done = CountDownLatch(1)
             mp.setOnCompletionListener { done.countDown() }
-            mp.setOnErrorListener { _, _, _ ->
+            mp.setOnErrorListener { _, what, extra ->
+                diag("播放失败：what=" + what + " extra=" + extra)
                 done.countDown()
                 true
             }
-            mp.setVolume(
-                gain.toFloat().coerceIn(0f, 3f),
-                gain.toFloat().coerceIn(0f, 3f),
-            )
+            mp.setVolume(gain.toFloat().coerceIn(0f, 3f), gain.toFloat().coerceIn(0f, 3f))
             mp.prepare()
             mp.start()
-            // 语速：安卓 6.0+ 支持 PlaybackParams；个别机型/音频格式不支持时按原速放，不影响出声
             runCatching {
                 mp.playbackParams = mp.playbackParams.setSpeed(speed.toFloat().coerceIn(0.5f, 2f))
             }
             done.await(PLAY_TIMEOUT_SEC, TimeUnit.SECONDS)
-        } catch (e: Exception) {
-            // 放不出来（地址过期/网络抖动）：跳过这一段，别把整条队列卡死在原地
+            runCatching { file.delete() }
+        } catch (e: Throwable) {
+            diag("播放异常：" + e.javaClass.simpleName + " " + (e.message ?: ""))
         } finally {
+            runCatching { lock?.release() }
             runCatching { mp.stop() }
             runCatching { mp.release() }
             player = null
         }
     }
+
+    /** 把音频下载到缓存目录再放：云端地址是 302 跳转，直连播放在部分机型上会失败。 */
+    private fun downloadAudio(url: String): File? {
+        var conn: java.net.HttpURLConnection? = null
+        return try {
+            val f = File(cacheDir, "seg.mp3")
+            val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            conn = c
+            c.instanceFollowRedirects = true
+            c.connectTimeout = 15_000
+            c.readTimeout = 20_000
+            if (c.responseCode !in 200..299) return null
+            c.inputStream.use { input -> f.outputStream().use { out -> input.copyTo(out) } }
+            if (f.length() < 1000) null else f
+        } catch (e: Throwable) {
+            null
+        } finally {
+            runCatching { conn?.disconnect() }
+        }
+    }
+
+    /**
+     * 自检上报：把原生这边发生了什么写进互动日志，页面上能直接看见。
+     * 以前放不出来时异常被吞掉，日志只写"念了"，分不清是合成、下载还是播放失败。
+     */
+    private fun diag(msg: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastDiagAt < 20_000L) return
+        lastDiagAt = now
+        try {
+            val body = "{\"events\":[{\"kind\":\"bullet\",\"nickname\":\"原生自检\",\"question\":\"" +
+                msg.take(160).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ") + "\"}]}"
+            Http.postJson(
+                Prefs.baseUrl(this) + "/api/live/inbound",
+                body,
+                Prefs.deviceKey(this),
+                Prefs.authToken(this),
+                5000,
+            )
+        } catch (_: Exception) {
+        }
+    }
+
+    private var lastDiagAt = 0L
 
     private fun sleep(ms: Long) {
         try {
