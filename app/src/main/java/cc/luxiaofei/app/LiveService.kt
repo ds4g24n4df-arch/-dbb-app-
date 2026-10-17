@@ -127,9 +127,9 @@ class LiveService : Service() {
 
     /** 取一段、念一段；返回下一次轮询前等多久（毫秒）。 */
     
-    private fun tick(): Long {
-                // 0) 先把"弹幕回答"播掉：主播这句念完 → 马上答公屏
-      var reply: Segment? = takeReadyReply()
+        private fun tick(): Long {
+        // 0) 先把"弹幕回答"播掉：主播这句念完 → 马上答公屏
+        var reply: Segment? = takeReadyReply()
         if (reply == null) reply = fetchPendingOne()
         if (reply != null) {
             // 播回答的这几秒里，先把下一句话术取回来合成好 ——
@@ -138,7 +138,6 @@ class LiveService : Service() {
             playIt(reply.audio, reply.speed, reply.gain)
             collectPrefetch(prefetched)
             startReplyPrefetch()
-        }
         }
 
         // 报时由原生定时去问，服务端按 pinClock 卡间隔
@@ -155,8 +154,9 @@ class LiveService : Service() {
             seg = got
         }
 
-        // 2) 开播之前先把下一段交出去合成
+        // 2) 开播之前先把下一段、以及"下一条弹幕回答"都交出去准备
         val pending = startPrefetch()
+        startReplyPrefetch()
 
         // 3) 放
         playIt(seg.audio, seg.speed, seg.gain)
@@ -166,9 +166,6 @@ class LiveService : Service() {
 
         return seg.gapMs
     }
-
-    // ───────────────────────── 预取 ─────────────────────────
-
     @Volatile
     private var nextReady: Segment? = null
 
