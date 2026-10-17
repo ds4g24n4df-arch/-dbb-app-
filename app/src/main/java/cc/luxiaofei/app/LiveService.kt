@@ -127,16 +127,17 @@ class LiveService : Service() {
 
     /** 取一段、念一段；返回下一次轮询前等多久（毫秒）。 */
     private fun tick(): Long {
-                // 0) 先把"弹幕回答"播掉：它和口播稿是两条路，不先问就永远插不进来
+                // 0) 先把"弹幕回答"播掉：主播这句念完 → 马上答公屏
         val readyReply = takeReadyReply()
-        if (readyReply != null) {
-            playIt(readyReply.audio, readyReply.speed, readyReply.gain)
-            return 200L
-        }
-        val reply = fetchPendingOne()
+        val reply = readyReply ?: fetchPendingOne()
         if (reply != null) {
+            // 播回答的这几秒里，先把下一句话术取回来合成好 ——
+            // 不然回答念完还要现合成 2~3 秒，中间又是一段静音
+            val prefetched = startPrefetch()
             playIt(reply.audio, reply.speed, reply.gain)
-            return 200L
+            collectPrefetch(prefetched)
+            startReplyPrefetch()
+        }
         }
 
         // 报时由原生定时去问，服务端按 pinClock 卡间隔
