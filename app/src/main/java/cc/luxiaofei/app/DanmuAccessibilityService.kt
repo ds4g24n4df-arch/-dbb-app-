@@ -164,7 +164,7 @@ class DanmuAccessibilityService : AccessibilityService() {
         // 5 分钟的窗太短 —— 挂着的旧弹幕会被当成"新出现的"重新推一遍，
         // 于是"收 N 条"里全是重复，而且每条都会去挤占 15 秒的回复节流，
         // 真观众的提问反而被顶掉（现场就是"问了不回"）。
-        seen.entries.removeAll { now - it.value > 30 * 60 * 1000 }
+            seen.entries.removeAll { now - it.value > 60 * 1000 }
 
             val freshTexts = ArrayList<String>()    
             val fresh = texts.mapNotNull { raw ->       
