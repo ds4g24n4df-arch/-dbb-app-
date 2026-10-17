@@ -166,7 +166,9 @@ class DanmuAccessibilityService : AccessibilityService() {
         // 真观众的提问反而被顶掉（现场就是"问了不回"）。
         seen.entries.removeAll { now - it.value > 30 * 60 * 1000 }
 
-        val fresh = texts.mapNotNull { raw ->
+        val fresh = texts.mapNotNull { raw ->       
+            val freshTexts = ArrayList<String>()        
+            val freshTexts = ArrayList<String>()
             val text = raw.trim().replace('\n', ' ').replace(Regex("\\s+"), " ")
             if (text.isEmpty() || text.length > MAX_TEXT_LEN) return@mapNotNull null
             if (UI_NOISE.any { text.contains(it) }) return@mapNotNull null
@@ -196,7 +198,7 @@ class DanmuAccessibilityService : AccessibilityService() {
         }
 
         val base = Prefs.baseUrl(this)
-        Http.postJson(
+                val sent = Http.postJson(
             "$base/api/live/inbound",
             json,
             Prefs.deviceKey(this),
@@ -204,6 +206,11 @@ class DanmuAccessibilityService : AccessibilityService() {
             // 短超时：读屏是"顺带做的事"，网络慢不该压着后面的扫描
             5000,
         )
+        if (sent == null) {
+            // 送失败：把这些行从"已送"里撤掉，下一轮重试。
+            // 不撤的话它们在 30 分钟内再也不会推 —— 现场表现就是"问了不回"。
+            freshTexts.forEach { seen.remove(it) }
+        }
     }
 
     /**
