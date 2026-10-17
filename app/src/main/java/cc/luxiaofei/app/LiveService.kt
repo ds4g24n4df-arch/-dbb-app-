@@ -412,6 +412,9 @@ class LiveService : Service() {
         } catch (e: Throwable) {
             diag("播放异常：" + e.javaClass.simpleName + " " + (e.message ?: ""))
         } finally {
+                        if (focus != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                am.abandonAudioFocusRequest(focus)
+            }
             runCatching { lock?.release() }
             runCatching { mp.stop() }
             runCatching { mp.release() }
