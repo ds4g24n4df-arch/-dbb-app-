@@ -126,6 +126,7 @@ class LiveService : Service() {
     }
 
     /** 取一段、念一段；返回下一次轮询前等多久（毫秒）。 */
+    
     private fun tick(): Long {
                 // 0) 先把"弹幕回答"播掉：主播这句念完 → 马上答公屏
       var reply: Segment? = takeReadyReply()
