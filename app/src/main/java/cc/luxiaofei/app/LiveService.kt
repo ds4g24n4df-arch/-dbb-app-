@@ -9,6 +9,7 @@ import android.app.Notification as AndroidNotification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.media.AudioManager
+import android.media.AudioFocusRequest
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
@@ -360,9 +361,9 @@ class LiveService : Service() {
                 // 申请音频焦点：不然抖音一直占着音频，我们一放音就被掐掉
         // （现场表现：回答刚开口就停，切回 App 才继续说）
         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        var focus: AudioManager.AudioFocusRequest? = null
+        var focus: AudioFocusRequest? = null
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            focus = AudioManager.AudioFocusRequest.Builder(
+            focus = AudioFocusRequest.Builder(
                 AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
             )
                 .setAudioAttributes(
