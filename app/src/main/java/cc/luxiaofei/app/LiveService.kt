@@ -437,28 +437,42 @@ class LiveService : Service() {
     }
 
     /** 把音频下载到缓存目录再放：云端地址是 302 跳转，直连播放在部分机型上会失败。 */
-        private fun downloadAudio(url: String): File? {
+            private fun downloadAudio(url: String): File? {
         if (url.startsWith("/")) {
             val local = File(url)
             return if (local.exists() && local.length() > 1000) local else null
         }
+        var target = url
         var conn: java.net.HttpURLConnection? = null
         return try {
             val f = File(cacheDir, "seg-" + System.nanoTime() + ".mp3")
-            val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-            conn = c
-            c.instanceFollowRedirects = true
-            c.connectTimeout = 15_000
-            c.readTimeout = 20_000
-            if (c.responseCode !in 200..299) return null
-            c.inputStream.use { input -> f.outputStream().use { out -> input.copyTo(out) } }
-            if (f.length() < 1000) null else f
+            // 音频地址是 302 跳转，HttpURLConnection 跨域/跨协议不会自动跟 —— 手动跟 3 次
+            var hops = 0
+            while (hops < 3) {
+                val c = java.net.URL(target).openConnection() as java.net.HttpURLConnection
+                conn = c
+                c.instanceFollowRedirects = false
+                c.connectTimeout = 15_000
+                c.readTimeout = 20_000
+                val code = c.responseCode
+                if (code in 300..399) {
+                    val loc = c.getHeaderField("Location")
+                    if (loc.isNullOrBlank()) return null
+                    target = java.net.URL(java.net.URL(target), loc).toString()
+                    hops++
+                    continue
+                }
+                if (code !in 200..299) return null
+                c.inputStream.use { input -> f.outputStream().use { out -> input.copyTo(out) } }
+                return if (f.length() < 1000) null else f
+            }
+            null
         } catch (e: Throwable) {
             null
         } finally {
             runCatching { conn?.disconnect() }
         }
-    }
+        }
     private fun diag(msg: String) {
     val now = System.currentTimeMillis()
     if (now - lastDiagAt < 20_000L) return
