@@ -71,7 +71,7 @@ class DanmuAccessibilityService : AccessibilityService() {
         private const val REGION_LEFT_RATIO = 0.0f
         private const val REGION_RIGHT_RATIO = 0.75f
         private const val REGION_TOP_RATIO = 0.22f
-        private const val REGION_BOTTOM_RATIO = 0.85f
+        private const val REGION_BOTTOM_RATIO = 0.95f
 
         /** 页面门：屏幕上出现这些字，才算"人在直播间" */
     private val ROOM_MARKERS = listOf("结束直播", "退出直播间", "结束PK", "关闭直播间", "说点什么", "友善评论", "在线观众", "人观看", "人气票")
