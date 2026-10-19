@@ -325,6 +325,7 @@ class DanmuAccessibilityService : AccessibilityService() {
      * 屏幕尺寸取不到（0）时不筛 —— 宁可多收几条，也不要因为拿不到分辨率一条都收不到。
      */
     private fun inDanmuRegion(node: AccessibilityNodeInfo, screen: IntArray): Boolean {
+        return true
         val w = screen[0]
         val h = screen[1]
         if (w <= 0 || h <= 0) return true
