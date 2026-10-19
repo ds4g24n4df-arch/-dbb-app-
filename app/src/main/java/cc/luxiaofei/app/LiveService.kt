@@ -130,6 +130,7 @@ class LiveService : Service() {
         runCatching { player?.release() }
         player = null
         prefetcher.shutdownNow()
+        packWarmer.shutdownNow()
         worker.shutdownNow()
         isRunning = false
         super.onDestroy()
