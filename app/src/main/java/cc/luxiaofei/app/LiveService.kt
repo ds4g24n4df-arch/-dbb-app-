@@ -153,6 +153,34 @@ class LiveService : Service() {
     
         private fun tick(): Long {
         // 0) 先把"弹幕回答"播掉：主播这句念完 → 马上答公屏
+                refreshSpeakFlag()
+        if (!nativeSpeaking) return IDLE_POLL_MS
+
+        val urgent = takeUrgent()
+        if (urgent != null) {
+            playIt(urgent.audio, urgent.speed, urgent.gain, allowInterrupt = false)
+            return 200L
+        }
+        refreshSpeakFlag()
+        if (!nativeSpeaking) return IDLE_POLL_MS
+
+        val urgent = takeUrgent()
+        if (urgent != null) {
+            playIt(urgent.audio, urgent.speed, urgent.gain, allowInterrupt = false)
+            return 200L
+        }
+        )
+            return 200L
+        }
+
+        if (!nativeSpeaking) return IDLE_POLL_MS
+
+        val urgent = takeUrgent()
+        if (urgent != null) {
+            playIt(urgent.audio, urgent.speed, urgent.gain, allowInterrupt = false)
+            return 200L
+        }
+
         var reply: Segment? = takeReadyReply()
         if (reply == null) reply = fetchPendingOne()
         if (reply != null) {
