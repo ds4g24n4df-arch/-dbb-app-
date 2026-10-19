@@ -16,7 +16,52 @@ import java.net.URL
  * 尽量不抛异常：采集是"顺带做的事"，网络抖一下不能让读屏服务崩掉，
  * 失败就返回 null，由调用方下次再发。
  */
-object Http {
+object Http {    
+    /** 下载文件到本地（语音包用） */
+    fun download(url: String, dest: java.io.File, timeoutMs: Int = 20000): Boolean {
+        var conn: HttpURLConnection? = null
+        return try {
+            val c = URL(url).openConnection() as HttpURLConnection
+            conn = c
+            c.connectTimeout = timeoutMs
+            c.readTimeout = timeoutMs
+            c.instanceFollowRedirects = true
+            val code = c.responseCode
+            if (code !in 200..299) return false
+            c.inputStream.use { input ->
+                dest.parentFile?.mkdirs()
+                dest.outputStream().use { out -> input.copyTo(out) }
+            }
+            dest.length() > 0
+        } catch (_: Exception) {
+            false
+        } finally {
+            try { conn?.disconnect() } catch (_: Exception) { }
+        }
+    }
+
+    /** GET 一个 JSON（语音包清单用） */
+    fun getJson(url: String, deviceKey: String, authToken: String, timeoutMs: Int = 8000): String? {
+        var conn: HttpURLConnection? = null
+        return try {
+            val c = URL(url).openConnection() as HttpURLConnection
+            conn = c
+            c.requestMethod = "GET"
+            c.connectTimeout = timeoutMs
+            c.readTimeout = timeoutMs
+            if (deviceKey.isNotBlank()) c.setRequestProperty("x-device-key", deviceKey)
+            if (authToken.isNotBlank()) c.setRequestProperty("x-auth-token", authToken)
+            val code = c.responseCode
+            val stream = if (code in 200..299) c.inputStream else c.errorStream
+            val body = if (stream == null) "" else
+                BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+            if (code in 200..299) body else null
+        } catch (_: Exception) {
+            null
+        } finally {
+            try { conn?.disconnect() } catch (_: Exception) { }
+        }
+    }
     /**
      * POST 一段 JSON。
      *
