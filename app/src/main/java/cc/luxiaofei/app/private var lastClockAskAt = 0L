@@ -1,3 +1,4 @@
+
 package cc.luxiaofei.app
 
 /*
@@ -45,6 +46,7 @@ class LiveService : Service() {
         private const val TTS_TIMEOUT_MS = 25_000
         private const val PREFETCH_WAIT_SEC = 12L
         private const val PLAY_TIMEOUT_SEC = 180L
+        private const val PENDING_PROBE_MS = 1500L
         private const val MIN_GAP_MS = 120L
         private const val MAX_GAP_MS = 3000L
 
