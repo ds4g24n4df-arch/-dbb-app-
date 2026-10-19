@@ -76,6 +76,26 @@ class LiveService : Service() {
 
     @Volatile
     private var lastClockAskAt = 0L
+    /** 这台手机该不该由**原生**出声（账号设置 appSpeak）；默认 true */
+    @Volatile
+    private var nativeSpeaking = true
+    /** 上次问"该不该原生出声"的时间：60 秒问一次 */
+    @Volatile
+    private var lastSpeakAskAt = 0L
+    /** 本场是否已经开始把语音包下载到机内 */
+    @Volatile
+    private var packWarmed = false
+    /** 抢播槽位：播放中探到的观众提问（单独放，别被预取结果挤掉） */
+    @Volatile
+    private var urgentReady: Segment? = null
+    /** 语音包预热线程（只做下载，不参与播放） */
+    private val packWarmer = Executors.newSingleThreadExecutor()
+
+    private fun takeUrgent(): Segment? {
+        val s = urgentReady
+        urgentReady = null
+        return s
+    }
 
     override fun onCreate() {
         super.onCreate()
