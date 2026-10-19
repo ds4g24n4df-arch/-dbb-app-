@@ -6,11 +6,6 @@ import android.content.SharedPreferences
 /**
  * App 自己的小仓库：把网页那边的"身份"和几个开关搬进来，供原生部分（前台服务、读屏采集）用。
  *
- * 为什么要存这份：网页里的身份存在浏览器 localStorage（设备标识 + 登录令牌），
- * 原生代码读不到浏览器的库。所以页面每次启动时把它交给 App 存一份
- * （见 MainActivity 里的 DBBApp.getIdentity()），原生侧发请求时直接用它 ——
- * 于是**采集到的公屏事件和网页那边是同一个账号**，配置、日志、额度全都是同一份。
- *
  * 注意：不做任何加解密。这两个值本来就存在同一台手机的浏览器数据里，
  * 存到 App 私有目录（只有本 App 能读）已经是同一级别的保护。
  */
@@ -20,6 +15,10 @@ object Prefs {
     private const val KEY_TOKEN = "auth_token"
     private const val KEY_BASE = "base_url"
     private const val KEY_COLLECT = "collect_enabled"
+    /** 直播间页面门：屏幕上有「结束直播」才算在直播间，否则整轮不采 */
+    private const val KEY_ROOM_GATE = "room_gate"
+    /** 本机语音包版本：和服务器一致 = 这一场的互动语音已下载到机内 */
+    private const val KEY_PACK_VERSION = "voice_pack_version"
 
     private fun sp(ctx: Context): SharedPreferences = ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
@@ -44,6 +43,18 @@ object Prefs {
     fun collectEnabled(ctx: Context): Boolean = sp(ctx).getBoolean(KEY_COLLECT, true)
 
     fun setCollectEnabled(ctx: Context, on: Boolean) = sp(ctx).edit().putBoolean(KEY_COLLECT, on).apply()
+
+    /** 直播间页面门开关（默认开：不在直播间就不采）。 */
+    fun roomGateEnabled(ctx: Context): Boolean = sp(ctx).getBoolean(KEY_ROOM_GATE, true)
+
+    fun setRoomGateEnabled(ctx: Context, on: Boolean) =
+        sp(ctx).edit().putBoolean(KEY_ROOM_GATE, on).apply()
+
+    /** 本机语音包版本（见 VoiceCache.kt）。 */
+    fun voicePackVersion(ctx: Context): String = sp(ctx).getString(KEY_PACK_VERSION, "") ?: ""
+
+    fun setVoicePackVersion(ctx: Context, v: String) =
+        sp(ctx).edit().putString(KEY_PACK_VERSION, v).apply()
 
     /** 有没有可用的身份：没有就别白推请求（服务端也认不出来）。 */
     fun hasIdentity(ctx: Context): Boolean = deviceKey(ctx).isNotBlank()
