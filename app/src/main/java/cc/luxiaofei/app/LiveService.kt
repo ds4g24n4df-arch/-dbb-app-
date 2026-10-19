@@ -187,7 +187,7 @@ class LiveService : Service() {
             // 播回答的这几秒里，先把下一句话术取回来合成好 ——
             // 不然回答念完还要现合成 2~3 秒，中间又是一段静音
             val prefetched = startPrefetch()
-            playIt(reply.audio, reply.speed, reply.gain)
+            playIt(reply.audio, reply.speed, reply.gain, allowInterrupt = false)
             collectPrefetch(prefetched)
             startReplyPrefetch()
         }
@@ -210,13 +210,15 @@ class LiveService : Service() {
         val pending = startPrefetch()
         startReplyPrefetch()
 
-        // 3) 放
-        playIt(seg.audio, seg.speed, seg.gain)
+        // 3) 放（口播稿可以被观众提问掐断 —— 掐了由下一轮优先念那条弹幕）
+        startPackWarmOnce()
+        val interrupted = playIt(seg.audio, seg.speed, seg.gain)
 
         // 4) 把预取结果收回来
         collectPrefetch(pending)
 
-        return seg.gapMs
+        // 被弹幕打断：换气停顿不要了，赶紧去念提问
+        return if (interrupted) 0L else seg.gapMs
     }
     @Volatile
     private var nextReady: Segment? = null
