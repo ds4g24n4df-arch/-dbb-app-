@@ -202,17 +202,14 @@ class LiveService : Service() {
         val pending = startPrefetch()
         startReplyPrefetch()
 
-        // 3) 放（口播稿可以被观众提问掐断 —— 掐了由下一轮优先念那条弹幕）
+        // 3) 放：口播稿**不打断**（这句一定念完，念完立刻接下一条弹幕回答）
         startPackWarmOnce()
-        val interrupted = playIt(seg.audio, seg.speed, seg.gain)
-
+        playIt(seg.audio, seg.speed, seg.gain, allowInterrupt = false)
         // 4) 把预取结果收回来
         collectPrefetch(pending)
-
-        // 被弹幕打断：换气停顿不要了，赶紧去念提问
-        return if (interrupted) 0L else seg.gapMs
+        // 这一句一定念完，回到循环第一件事就是念待答的弹幕回答
+        return seg.gapMs
     }
-
     private fun takeReady(): Segment? {
         val s = nextReady
         nextReady = null
